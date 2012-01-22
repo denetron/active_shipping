@@ -201,7 +201,6 @@ module ActiveMerchant
       
       def address_verification(location, options = {})
         request = build_address_verification_request(location, options)
-        puts request.inspect
         parse_address_verification_response(commit(:verify_address, request, false), options)
       end
       
@@ -315,7 +314,7 @@ module ActiveMerchant
             addr << XmlNode.new('Zip4', '')
           end
         end
-        puts request.to_s
+        
         URI.encode(save_request(request.to_s))
       end
       
@@ -389,7 +388,7 @@ module ActiveMerchant
         
         xml = REXML::Document.new(response)
         
-        if error = xml.elements['/Error']
+        if error = xml.elements['/Error'] || error = xml.elements["/AddressValidateResponse/Address/Error"]
           success = false
           message = error.elements['Description'].text
         else
