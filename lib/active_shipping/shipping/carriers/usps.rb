@@ -31,11 +31,13 @@ module ActiveMerchant
       API_CODES = {
         :us_rates => 'RateV4',
         :world_rates => 'IntlRateV2',
+        :tracking_request => 'TrackV2',
         :test => 'CarrierPickupAvailability'
       }
       USE_SSL = {
         :us_rates => false,
         :world_rates => false,
+        :tracking_request => false,
         :test => true
       }
       CONTAINERS = {
@@ -159,6 +161,10 @@ module ActiveMerchant
         end
       end
       
+      def find_tracking_information(tracking_number, options = {})
+        tracking_information(tracking_number, options)
+      end
+      
       def valid_credentials?
         # Cannot test with find_rates because USPS doesn't allow that in test mode
         test_mode? ? canned_address_verification_works? : super
@@ -180,6 +186,11 @@ module ActiveMerchant
         request = build_world_rate_request(packages, destination)
          # never use test mode; rate requests just won't work on test servers
         parse_rate_response origin, destination, packages, commit(:world_rates,request,false), options
+      end
+      
+      def tracking_information(tracking_number, options = {})
+        request = build_tracking_information_request(tracking_number, options)
+        parse_tracking_information_response(commit(:tracking_request, request, false), options)
       end
       
       # Once the address verification API is implemented, remove this and have valid_credentials? build the request using that instead.
@@ -270,6 +281,14 @@ module ActiveMerchant
         URI.encode(save_request(request.to_s))
       end
       
+      def build_tracking_information_request(tracking_number, options = {})
+        request = XmlNode.new('TrackRequest', :USERID => @options[:login]) do |tracking_request|
+          tracking_request << XmlNode.new('TrackID', :ID => tracking_number)
+        end
+        
+        URI.encode(save_request(request.to_s))
+      end
+      
       def parse_rate_response(origin, destination, packages, response, options={})
         success = true
         message = ''
@@ -311,6 +330,26 @@ module ActiveMerchant
         end
         
         RateResponse.new(success, message, Hash.from_xml(response), :rates => rate_estimates, :xml => response, :request => last_request)
+      end
+      
+      def parse_tracking_information_response(response, options = {})
+        success = true
+        events = []
+        
+        xml = REXML::Document.new(response)
+        
+        if error = xml.elements['/Error']
+          success = false
+          message = error.elements['Description'].text
+        else
+          events << xml.elements["/TrackResponse/TrackInfo/TrackSummary"].get_text.to_s
+          
+          xml.elements.each("/TrackResponse/TrackInfo/TrackDetail") do |detail|
+            events << detail.get_text.to_s
+          end
+        end
+        
+        events
       end
       
       def rates_from_response_node(response_node, packages)
