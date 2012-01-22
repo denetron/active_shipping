@@ -32,12 +32,14 @@ module ActiveMerchant
         :us_rates => 'RateV4',
         :world_rates => 'IntlRateV2',
         :tracking_request => 'TrackV2',
+        :verify_address => 'Verify',
         :test => 'CarrierPickupAvailability'
       }
       USE_SSL = {
         :us_rates => false,
         :world_rates => false,
         :tracking_request => false,
+        :verify_address => false,
         :test => true
       }
       CONTAINERS = {
@@ -165,6 +167,10 @@ module ActiveMerchant
         tracking_information(tracking_number, options)
       end
       
+      def verify_address(location, options = {})
+        address_verification(location, options = {})
+      end
+      
       def valid_credentials?
         # Cannot test with find_rates because USPS doesn't allow that in test mode
         test_mode? ? canned_address_verification_works? : super
@@ -191,6 +197,12 @@ module ActiveMerchant
       def tracking_information(tracking_number, options = {})
         request = build_tracking_information_request(tracking_number, options)
         parse_tracking_information_response(commit(:tracking_request, request, false), options)
+      end
+      
+      def address_verification(location, options = {})
+        request = build_address_verification_request(location, options)
+        puts request.inspect
+        parse_address_verification_response(commit(:verify_address, request, false), options)
       end
       
       # Once the address verification API is implemented, remove this and have valid_credentials? build the request using that instead.
@@ -289,6 +301,24 @@ module ActiveMerchant
         URI.encode(save_request(request.to_s))
       end
       
+      def build_address_verification_request(location, options = {})
+        request = XmlNode.new('AddressValidateRequest', :USERID => @options[:login]) do |address|
+          address << XmlNode.new('Address', :ID => 0) do |addr|
+            addr << XmlNode.new('FirmName', location.company_name || '')
+            # Address1 represents sub addresses (ste,apt,etc...)
+            addr << XmlNode.new('Address1', location.address2 || '')
+            # Address2 represents the street level address
+            addr << XmlNode.new('Address2', location.address1 || '')
+            addr << XmlNode.new('City', location.city || '')
+            addr << XmlNode.new('State', location.state || '')
+            addr << XmlNode.new('Zip5', location.postal_code || '')
+            addr << XmlNode.new('Zip4', '')
+          end
+        end
+        puts request.to_s
+        URI.encode(save_request(request.to_s))
+      end
+      
       def parse_rate_response(origin, destination, packages, response, options={})
         success = true
         message = ''
@@ -340,7 +370,7 @@ module ActiveMerchant
         
         if error = xml.elements['/Error']
           success = false
-          message = error.elements['Description'].text
+          events << error.elements['Description'].text
         else
           events << xml.elements["/TrackResponse/TrackInfo/TrackSummary"].get_text.to_s
           
@@ -350,6 +380,28 @@ module ActiveMerchant
         end
         
         events
+      end
+      
+      def parse_address_verification_response(response, options = {})
+        success = true
+        location = Location.new
+        message = nil
+        
+        xml = REXML::Document.new(response)
+        
+        if error = xml.elements['/Error']
+          success = false
+          message = error.elements['Description'].text
+        else
+          return Location.new(:company_name => (xml.elements["/AddressValidateResponse/Address/FirmName"] ? xml.elements["/AddressValidateResponse/Address/FirmName"].get_text.to_s : ''),
+                                  :address1     => (xml.elements["/AddressValidateResponse/Address/Address2"] ? xml.elements["/AddressValidateResponse/Address/Address2"].get_text.to_s : ''),
+                                  :address2     => (xml.elements["/AddressValidateResponse/Address/Address1"] ? xml.elements["/AddressValidateResponse/Address/Address1"].get_text.to_s : ''),
+                                  :city         => (xml.elements["/AddressValidateResponse/Address/City"] ? xml.elements["/AddressValidateResponse/Address/City"].get_text.to_s : ''),
+                                  :state        => (xml.elements["/AddressValidateResponse/Address/State"] ? xml.elements["/AddressValidateResponse/Address/State"].get_text.to_s : ''),
+                                  :postal_code  => xml.elements["/AddressValidateResponse/Address/Zip5"].get_text.to_s + "-" + xml.elements["/AddressValidateResponse/Address/Zip4"].get_text.to_s)
+        end
+        
+        success ? location : message
       end
       
       def rates_from_response_node(response_node, packages)
